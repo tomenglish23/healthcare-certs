@@ -292,10 +292,10 @@ class RAGState(TypedDict):
     sources: List[str]
 
 
-def create_rag_graph(vs: VectorStore):
-    """Creates the LangGraph workflow"""
+    def create_rag_graph(vs: VectorStore):
+        """Creates the LangGraph workflow"""
     
-    llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, temperature=0)
+        llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, temperature=0)
     
     def analyze_query(state: RAGState) -> RAGState:
         """Extract discipline from question if not provided"""
@@ -408,7 +408,7 @@ def create_rag_graph(vs: VectorStore):
     
     # Build graph
     workflow = StateGraph(RAGState)
-    workflow.add_node("analyze", analyze_query)
+    # tmetme workflow.add_node("analyze", analyze_query)
     workflow.add_node("retrieve", retrieve_docs)
     workflow.add_node("grade", grade_relevance)
     workflow.add_node("generate", gen_a)
