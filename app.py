@@ -275,10 +275,6 @@ class VectorStore:
 # LANGGRAPH WORKFLOW
 # ============================================================
 
-# ============================================================
-# LANGGRAPH WORKFLOW
-# ============================================================
-
 class RAGState(TypedDict):
     """State object for LangGraph workflow"""
     q: str
@@ -292,136 +288,49 @@ class RAGState(TypedDict):
     sources: List[str]
 
 
-    def create_rag_graph(vs: VectorStore):
-        """Creates the LangGraph workflow"""
+def create_rag_graph(vs: VectorStore):  # ? NOT indented under RAGState
+    """Creates the LangGraph workflow"""
     
-        llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, temperature=0)
+    llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, temperature=0)
     
-    def analyze_query(state: RAGState) -> RAGState:
-        """Extract discipline from question if not provided"""
-        if state.get("discipline"):
-            return state
-        
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", "Extract the technical discipline from this question. "
-                      "Return ONLY the discipline name."),
-            ("user", "{q}")
-        ])
-        
-        chain = prompt | llm
-        response = chain.invoke({"q": state["q"]})
-        discipline = response.content.strip()
-        
-        state["discipline"] = discipline if discipline != "General" else None
-        return state
-    
+    # All these functions indented INSIDE create_rag_graph
     def retrieve_docs(state: RAGState) -> RAGState:
         """Retrieve relevant docs"""
-        
-        discipline = state.get("discipline")
-        area = state.get("area")
-        
-        if CONFIG.get('features', {}).get('debug_mode'):
-            print(f"\nFILTER DEBUG:")
-            print(f"   Looking for discipline: '{discipline}'")
-            print(f"   Looking for area: '{area}'")
-        
-        # TEMPORARILY DISABLE FILTERING - use pure vector search
-        filter_dict = None
-        
-        try:
-            if CONFIG.get('features', {}).get('debug_mode'):
-                print(f"   Filter dict: {filter_dict} (filtering disabled)")
-            
-            docs = vs.search(state["q"], k=4, filter_dict=None)
-            
-            if CONFIG.get('features', {}).get('debug_mode'):
-                print(f"   Retrieved: {len(docs)} docs")
-                if docs:
-                    print(f"   First doc meta: {docs[0].metadata}")
-            
-        except Exception as e:
-            print(f"   ERROR in retrieve_docs: {e}")
-            import traceback
-            traceback.print_exc()
-            docs = []
-        
-        state["rxd_docs"] = docs
-        state["ctx"] = "\n\n".join([doc.page_content for doc in docs])
-        state["sources"] = [doc.metadata.get("source", "unknown") for doc in docs]
-        
+        # ... your code ...
         return state
     
     def grade_relevance(state: RAGState) -> RAGState:
         """Determine if retrieved docs are relevant"""
-        if not state["rxd_docs"] or not state.get("ctx"):
-            state["use_fb"] = True
-            state["confidence"] = 0.0
-            return state
-    
-        q_words = set(state["q"].lower().split())
-        ctx_words = set(state["ctx"].lower().split())
-    
-        if not q_words:  # Safety check
-            state["confidence"] = 0.0
-            state["use_fb"] = True
-            return state
-    
-        overlap = len(q_words & ctx_words)
-        confidence = min(overlap / len(q_words), 1.0) if len(q_words) > 0 else 0.0
-    
-        state["confidence"] = round(confidence, 2)  # Round to avoid float precision issues
-        state["use_fb"] = False  # Always use retrieved docs
+        # ... your code ...
         return state
-
+    
     def gen_a(state: RAGState) -> RAGState:
         """Generate answer from context"""
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are an expert assistant. "
-                      "Answer based ONLY on the provided context. Be concise and accurate."),
-            ("user", "Context:\n{ctx}\n\nQuestion: {q}\n\nAnswer:")
-        ])
-        
-        chain = prompt | llm
-        response = chain.invoke({"ctx": state["ctx"], "q": state["q"]})
-        state["a"] = response.content
+        # ... your code ...
         return state
     
     def fallback_a(state: RAGState) -> RAGState:
         """Use OpenAI when docs don't have answer"""
-        if not CONFIG.get('features', {}).get('enable_fallback', True):
-            state["a"] = "No relevant information found in knowledge base."
-            return state
-            
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are an expert assistant. Answer this question accurately."),
-            ("user", "{q}")
-        ])
-        
-        chain = prompt | llm
-        response = chain.invoke({"q": state["q"]})
-        state["a"] = f"[Using general knowledge] {response.content}"
+        # ... your code ...
         return state
     
     def should_use_fb(state: RAGState) -> str:
         return "fallback" if state["use_fb"] else "generate"
     
-    # Build graph
+    # Build graph - NO analyze node
     workflow = StateGraph(RAGState)
-    # tmetme workflow.add_node("analyze", analyze_query)
     workflow.add_node("retrieve", retrieve_docs)
     workflow.add_node("grade", grade_relevance)
     workflow.add_node("generate", gen_a)
     workflow.add_node("fallback", fallback_a)
     
-    workflow.set_entry_point("analyze")
-    workflow.add_edge("analyze", "retrieve")
-    workflow.add_edge("retrieve", "grade")
+    workflow.set_entry_point("retrieve")  # ? Start at retrieve, NOT analyze
+    workflow.add_edge("retrieve", "grade")  # ? No analyze edge
     workflow.add_conditional_edges("grade", should_use_fb, {"generate": "generate", "fallback": "fallback"})
     workflow.add_edge("generate", END)
     workflow.add_edge("fallback", END)
     
-    return workflow.compile()  # ? THIS IS THE KEY LINE - RETURNS THE GRAPH!
+    return workflow.compile()
 
 
 # ============================================================
