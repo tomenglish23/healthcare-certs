@@ -523,8 +523,8 @@ def get_config():
     # with open('build/taxonomies.json') as f:
         # return jsonify(json.load(f))
 
-@app.route('/api/taxonomies')
-def get_taxonomies():
+@app.route('/api/taxonomies', methods=['GET', 'POST'])
+def get_taxonomies()::
     """Return available taxonomies for filters"""
     taxonomies = {
         'states': ['Tennessee', 'West Virginia'],
