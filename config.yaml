@@ -1,0 +1,10 @@
+product:
+  name: "healthcare-certs"
+  version: "1.0.0"
+branding:
+  title: "Healthcare Certs"
+data:
+  source_file: "healthcare-certs-all.md"
+  
+features:
+  debug_mode: true

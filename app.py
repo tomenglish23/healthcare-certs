@@ -1,0 +1,680 @@
+"""
+TEAI RAG System - Production Ready
+Configurable RAG assistant with dynamic hierarchy loading
+"""
+from __future__ import annotations
+
+import os
+import sys
+import re
+import tarfile
+from typing import TypedDict, List, Optional, Dict, Any
+
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import yaml
+
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_chroma import Chroma
+from langchain_core.documents import Document
+from langchain_core.prompts import ChatPromptTemplate
+from langgraph.graph import StateGraph, END
+
+
+# ============================================================
+# CONFIGURATION LOADING
+# ============================================================
+
+def slugify(text: str, separator: str = '-') -> str:
+    """Convert text to URL/filename safe slug"""
+    slug = text.lower()
+    slug = re.sub(r'[^\w\s-]', '', slug)
+    slug = re.sub(r'[-\s]+', separator, slug)
+    return slug.strip(separator)
+
+def load_config() -> Dict[str, Any]:
+    """Load application configuration from YAML"""
+    config_path = os.environ.get('CONFIG_PATH', 'config.yaml')
+    
+    try:
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+            
+        # Auto-generate slugs if not provided
+        product_name = config['product']['name']
+        if 'slug' not in config['product']:
+            config['product']['slug'] = slugify(product_name, '-')
+        
+        # Auto-generate data filename if not provided
+        if not config['data'].get('source_file'):
+            file_slug = slugify(product_name, '_')
+            config['data']['source_file'] = f"{file_slug}.md"
+        
+        return config
+        
+    except FileNotFoundError:
+        print(f"Config file not found: {config_path}, using defaults")
+        return {
+            'product': {'name': 'TEAI RAG System', 'slug': 'teai-rag', 'version': '1.0.0'},
+            'branding': {'title': 'RAG Assistant', 'subtitle': ''},
+            'data': {'source_file': 'data.md', 'levels': 3, 'chunk_max_size': 2000},
+            'features': {'show_confidence': True, 'show_sources': True, 'enable_fallback': True}
+        }
+
+CONFIG = load_config()
+
+# Easy access to config values
+PRODUCT_NAME = CONFIG['product']['name']
+PRODUCT_SLUG = CONFIG['product']['slug']
+PRODUCT_VERSION = CONFIG['product']['version']
+APP_TITLE = CONFIG['branding']['title']
+DATA_FILE = CONFIG['data']['source_file']
+CHUNK_MAX_SIZE = CONFIG['data'].get('chunk_max_size', 2000)
+
+DIR_DATA = "./data"
+DIR_PERSIST = "./chroma_db"
+CHROMA_TAR = "chroma_db.tar.gz"
+
+OPENAI_CHAT_MODEL = os.environ.get("OPENAI_CHAT_MODEL", "gpt-4o-mini")
+OPENAI_EMBED_MODEL = os.environ.get("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+
+print("=" * 70)
+print(f"[*] {PRODUCT_NAME} v{PRODUCT_VERSION}")
+print(f"[*] Slug: {PRODUCT_SLUG}")
+print(f"[*] Data: {DATA_FILE}")
+print("=" * 70)
+
+
+# ============================================================
+# FLASK APP
+# ============================================================
+
+app = Flask(__name__)
+CORS(app)
+
+# Globals
+doc_ingester: "DocIngester | None" = None
+vector_store: "VectorStore | None" = None
+app_graph = None
+_system_initialized = False
+_init_error = None
+
+
+# ============================================================
+# DOCUMENT INGESTION
+# ============================================================
+
+class DocIngester:
+    """Loads and parses markdown files with hierarchy awareness"""
+    
+    def __init__(self, data_dir: str = DIR_DATA):
+        self.data_dir = data_dir
+        self.level1 = set()
+        self.level2 = {}
+        self.level3 = {}
+    
+    def load_docs(self) -> List[Document]:
+        """Load all .txt/.md files from data directory"""
+        docs = []
+        
+        for filename in os.listdir(self.data_dir):
+            if filename.endswith(('.txt', '.md')):
+                filepath = os.path.join(self.data_dir, filename)
+                print(f"Loading: {filename}")
+                
+                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                
+                docs.extend(self._parse_hierarchical(content, filename))
+        
+        print(f"Chunks: Loaded {len(docs)} chunks total")
+        print(f"Level 1: {len(self.level1)} disciplines")
+        print(f"Level 2: {sum(len(areas) for areas in self.level2.values())} areas")
+        return docs
+    
+    def get_level1(self) -> List[str]:
+        """Get list of all Level 1 disciplines"""
+        return sorted(self.level1)
+    
+    def get_level2(self) -> dict:
+        """Get Level 2 areas organized by Level 1"""
+        return {k: sorted(v) for k, v in self.level2.items()}
+    
+    def get_level3(self) -> dict:
+        """Get Level 3 topics organized by Level 1 and Level 2"""
+        result = {}
+        for disc, areas_dict in self.level3.items():
+            result[disc] = {area: sorted(topics) for area, topics in areas_dict.items()}
+        return result
+    
+    def _parse_hierarchical(self, content: str, source: str) -> List[Document]:
+        """Parse content tracking discipline/area context"""
+        lines = content.split("\n")
+
+        current_discipline = "General"
+        current_area = "General"
+        current_chunk_lines: List[str] = []
+        docs: List[Document] = []
+
+        for line in lines:
+            line = line.rstrip("\r")
+
+            if line.startswith("# ") and not line.startswith("## "):
+                if current_chunk_lines:
+                    self._create_chunk(current_chunk_lines, current_discipline, current_area, source, docs)
+                    current_chunk_lines = []
+
+                current_discipline = line[2:].strip()
+                self.level1.add(current_discipline)
+
+                if current_discipline not in self.level2:
+                    self.level2[current_discipline] = set()
+                if current_discipline not in self.level3:
+                    self.level3[current_discipline] = {}
+
+                continue
+
+            if line.startswith("## ") and not line.startswith("### "):
+                if current_chunk_lines:
+                    self._create_chunk(current_chunk_lines, current_discipline, current_area, source, docs)
+                    current_chunk_lines = []
+
+                current_area = line[3:].strip()
+                self.level2[current_discipline].add(current_area)
+
+                if current_area not in self.level3[current_discipline]:
+                    self.level3[current_discipline][current_area] = set()
+
+                continue
+
+            if line.startswith("### ") or line.startswith("Q:"):
+                if current_chunk_lines:
+                    self._create_chunk(current_chunk_lines, current_discipline, current_area, source, docs)
+                    current_chunk_lines = []
+
+                topic = line[4:].strip() if line.startswith("### ") else line[2:].strip()
+                if current_area in self.level3.get(current_discipline, {}):
+                    self.level3[current_discipline][current_area].add(topic)
+
+                current_chunk_lines.append(line)
+            else:
+                current_chunk_lines.append(line)
+
+            # Safety: flush large chunks
+            chunk_text = "\n".join(current_chunk_lines)
+            if len(chunk_text) >= CHUNK_MAX_SIZE:
+                self._create_chunk(current_chunk_lines, current_discipline, current_area, source, docs)
+                current_chunk_lines = []
+
+        if current_chunk_lines:
+            self._create_chunk(current_chunk_lines, current_discipline, current_area, source, docs)
+
+        return docs
+    
+    def _create_chunk(self, lines, discipline, area, source, docs):
+        """Create a document chunk with metadata"""
+        chunk_text = "\n".join(lines).strip()
+        
+        if not chunk_text:
+            return
+        
+        docs.append(Document(
+            page_content=chunk_text,
+            metadata={
+                "discipline": discipline.upper(),
+                "area": area.upper(),
+                "source": source
+            }
+        ))
+
+
+# ============================================================
+# VECTOR STORE
+# ============================================================
+
+class VectorStore:
+    """ChromaDB vector store wrapper"""
+    
+    def __init__(self, persist_dir: str = DIR_PERSIST):
+        self.embs = None
+        self.persist_dir = persist_dir
+        self.vs = None
+    
+    def _ensure_embeddings(self):
+        if self.embs is None:
+            self.embs = OpenAIEmbeddings(model=OPENAI_EMBED_MODEL)
+
+    def create_or_load(self, docs: List[Document] = None):
+        """Create new vectorstore or load existing"""
+        self._ensure_embeddings()
+
+        if docs:
+            self.vs = Chroma.from_documents(
+                documents=docs,
+                embedding=self.embs,
+                persist_directory=self.persist_dir
+            )
+            print(f"Vectorstore: Created with {len(docs)} docs")
+        else:
+            self.vs = Chroma(
+                persist_directory=self.persist_dir,
+                embedding_function=self.embs
+            )
+            print("✅ Vectorstore: Loaded existing")
+        
+        return self.vs
+    
+    def search(self, query: str, k: int = 4, filter_dict: dict = None):
+        """Search with optional metadata filtering"""
+        if filter_dict:
+            return self.vs.similarity_search(query, k=k, filter=filter_dict)
+        return self.vs.similarity_search(query, k=k)
+
+
+# ============================================================
+# LANGGRAPH WORKFLOW
+# ============================================================
+
+# ============================================================
+# LANGGRAPH WORKFLOW
+# ============================================================
+
+class RAGState(TypedDict):
+    """State object for LangGraph workflow"""
+    q: str
+    discipline: str | None
+    area: str | None
+    rxd_docs: List[Document]
+    ctx: str
+    a: str
+    confidence: float
+    use_fb: bool
+    sources: List[str]
+
+
+def create_rag_graph(vs: VectorStore):
+    """Creates the LangGraph workflow"""
+    
+    llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, temperature=0)
+    
+    def analyze_query(state: RAGState) -> RAGState:
+        """Extract discipline from question if not provided"""
+        if state.get("discipline"):
+            return state
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "Extract the technical discipline from this question. "
+                      "Return ONLY the discipline name."),
+            ("user", "{q}")
+        ])
+        
+        chain = prompt | llm
+        response = chain.invoke({"q": state["q"]})
+        discipline = response.content.strip()
+        
+        state["discipline"] = discipline if discipline != "General" else None
+        return state
+    
+    def retrieve_docs(state: RAGState) -> RAGState:
+        """Retrieve relevant docs"""
+        
+        discipline = state.get("discipline")
+        area = state.get("area")
+        
+        if CONFIG.get('features', {}).get('debug_mode'):
+            print(f"\nFILTER DEBUG:")
+            print(f"   Looking for discipline: '{discipline}'")
+            print(f"   Looking for area: '{area}'")
+        
+        # TEMPORARILY DISABLE FILTERING - use pure vector search
+        filter_dict = None
+        
+        try:
+            if CONFIG.get('features', {}).get('debug_mode'):
+                print(f"   Filter dict: {filter_dict} (filtering disabled)")
+            
+            docs = vs.search(state["q"], k=4, filter_dict=None)
+            
+            if CONFIG.get('features', {}).get('debug_mode'):
+                print(f"   Retrieved: {len(docs)} docs")
+                if docs:
+                    print(f"   First doc meta: {docs[0].metadata}")
+            
+        except Exception as e:
+            print(f"   ERROR in retrieve_docs: {e}")
+            import traceback
+            traceback.print_exc()
+            docs = []
+        
+        state["rxd_docs"] = docs
+        state["ctx"] = "\n\n".join([doc.page_content for doc in docs])
+        state["sources"] = [doc.metadata.get("source", "unknown") for doc in docs]
+        
+        return state
+    
+    def grade_relevance(state: RAGState) -> RAGState:
+        """Determine if retrieved docs are relevant"""
+        if not state["rxd_docs"]:
+            state["use_fb"] = True
+            state["confidence"] = 0.0
+            print("DEBUG: No docs found, using fallback")
+            return state
+    
+        q_words = set(state["q"].lower().split())
+        ctx_words = set(state["ctx"].lower().split())
+        overlap = len(q_words & ctx_words)
+        confidence = min(overlap / max(len(q_words), 1), 1.0)
+    
+        print(f"DEBUG: Confidence = {confidence}, Overlap = {overlap}")
+        print(f"DEBUG: Question words: {q_words}")
+        print(f"DEBUG: Context preview: {state['ctx'][:200]}...")
+    
+        state["confidence"] = confidence
+        state["use_fb"] = False  # ? FORCE this to False
+        print(f"DEBUG: use_fb set to {state['use_fb']}")
+        return state    
+
+    def gen_a(state: RAGState) -> RAGState:
+        """Generate answer from context"""
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are an expert assistant. "
+                      "Answer based ONLY on the provided context. Be concise and accurate."),
+            ("user", "Context:\n{ctx}\n\nQuestion: {q}\n\nAnswer:")
+        ])
+        
+        chain = prompt | llm
+        response = chain.invoke({"ctx": state["ctx"], "q": state["q"]})
+        state["a"] = response.content
+        return state
+    
+    def fallback_a(state: RAGState) -> RAGState:
+        """Use OpenAI when docs don't have answer"""
+        if not CONFIG.get('features', {}).get('enable_fallback', True):
+            state["a"] = "No relevant information found in knowledge base."
+            return state
+            
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are an expert assistant. Answer this question accurately."),
+            ("user", "{q}")
+        ])
+        
+        chain = prompt | llm
+        response = chain.invoke({"q": state["q"]})
+        state["a"] = f"[Using general knowledge] {response.content}"
+        return state
+    
+    def should_use_fb(state: RAGState) -> str:
+        return "fallback" if state["use_fb"] else "generate"
+    
+    # Build graph
+    workflow = StateGraph(RAGState)
+    workflow.add_node("analyze", analyze_query)
+    workflow.add_node("retrieve", retrieve_docs)
+    workflow.add_node("grade", grade_relevance)
+    workflow.add_node("generate", gen_a)
+    workflow.add_node("fallback", fallback_a)
+    
+    workflow.set_entry_point("analyze")
+    workflow.add_edge("analyze", "retrieve")
+    workflow.add_edge("retrieve", "grade")
+    workflow.add_conditional_edges("grade", should_use_fb, {"generate": "generate", "fallback": "fallback"})
+    workflow.add_edge("generate", END)
+    workflow.add_edge("fallback", END)
+    
+    return workflow.compile()  # ? THIS IS THE KEY LINE - RETURNS THE GRAPH!
+
+
+# ============================================================
+# INITIALIZATION
+# ============================================================
+
+def initialize_system():
+    """Initialize the RAG system on startup"""
+    global vector_store, doc_ingester, app_graph, _system_initialized, _init_error
+    
+    if _system_initialized:
+        return True
+    
+    if _init_error:
+        print(f"  Skipping init due to previous error: {_init_error}")
+        return False
+    
+    try:
+        print("=" * 70)
+        print(f"{APP_TITLE} - Initializing...")
+        print("=" * 70)
+        
+        # Unpack chroma_db if it doesn't exist
+        if not os.path.exists(DIR_PERSIST):
+            if os.path.exists(CHROMA_TAR):
+                print("Unpacking vector database...")
+                with tarfile.open(CHROMA_TAR, 'r:gz') as tar:
+                    tar.extractall('.')
+        
+        # Load documents
+        doc_ingester = DocIngester(data_dir=DIR_DATA)
+        docs = doc_ingester.load_docs()
+        
+        if not docs:
+            msg = "No documents found!"
+            print(f"{msg}")
+            _init_error = msg
+            return False
+        
+        # Load/create vector store
+        vector_store = VectorStore()
+        if os.path.exists(DIR_PERSIST):
+            vector_store.create_or_load()
+        else:
+            vector_store.create_or_load(docs)
+        
+        # Build graph
+        app_graph = create_rag_graph(vector_store)
+        
+        _system_initialized = True
+        print("System ready!")
+        # ?? DEBUG: Show first 5 chunks from C# Arrays
+        print("\nDEBUG - First 5 C# chunks:")
+        all_data = vector_store.vs.get()
+        for i, meta in enumerate(all_data['metadatas'][:5]):
+            print(f"{i+1}. {meta}")
+
+        # Show specific Arrays chunks
+        arrays_chunks = [m for m in all_data['metadatas'] if 'Arrays' in str(m.get('area', ''))]
+        print(f"\nDEBUG - Found {len(arrays_chunks)} chunks with 'Arrays' in area:")
+        for i, meta in enumerate(arrays_chunks[:3]):
+            print(f"{i+1}. {meta}")
+        return True
+        
+    except Exception as e:
+        _init_error = str(e)
+        print(f"Initialization error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+# ============================================================
+# API ROUTES
+# ============================================================
+
+@app.route('/')
+def index():
+    """Health check"""
+    return jsonify({
+        "status": "ok",
+        "product": PRODUCT_NAME,
+        "version": PRODUCT_VERSION
+    })
+
+@app.route('/api/config', methods=['GET'])
+def get_config():
+    """Get public configuration"""
+    return jsonify({
+        'product': CONFIG['product'],
+        'branding': CONFIG['branding'],
+        'features': CONFIG.get('features', {}),
+        'customization': CONFIG.get('customization', {})
+    })
+
+# @app.route('/api/taxonomies')
+# def get_taxonomies():
+    # # Load from generated taxonomies.json
+    # with open('build/taxonomies.json') as f:
+        # return jsonify(json.load(f))
+
+@app.route('/api/taxonomies')
+def get_taxonomies():
+    """Return available taxonomies for filters"""
+    taxonomies = {
+        'states': ['Tennessee', 'West Virginia'],
+        'cost_ranges': ['under500', '500to1000', '1000to2000', '2000to5000', 'over5000'],
+        'durations': ['under4weeks', '4to8weeks', '8to12weeks', '3to6months', '6to12months'],
+        'certifications': ['CNA', 'Phlebotomy', 'Medical Assistant', 'EMT', 'Dental Assistant', 'Pharmacy Tech']
+    }
+    return jsonify(taxonomies)
+
+@app.route('/api/hierarchy', methods=['GET'])
+def get_hierarchy():
+    """Get full hierarchy: disciplines → areas → topics"""
+    if not doc_ingester:
+        if not initialize_system():
+            return jsonify({"error": "System not initialized"}), 503
+    
+    hierarchy = {
+        'disciplines': doc_ingester.get_level1(),
+        'areas': doc_ingester.get_level2(),
+        'topics': doc_ingester.get_level3()
+    }
+    
+    return jsonify(hierarchy)
+
+@app.route('/api/query', methods=['POST'])
+def query():
+    """Handle query requests"""
+    try:
+        data = request.json
+        question = data.get('question', '').strip()
+        discipline = data.get('discipline')
+        area = data.get('area')
+        
+        if not question:
+            return jsonify({"error": "Question required"}), 400
+        
+        if not app_graph:
+            if not initialize_system():
+                return jsonify({"error": "System not initialized"}), 503
+        
+        if CONFIG.get('features', {}).get('debug_mode'):
+            print(f"   Querying: {question}")
+            print(f"   Discipline: {discipline}")
+            print(f"   Area: {area}")
+        
+        result = app_graph.invoke({
+            "q": question,
+            "discipline": discipline,
+            "area": area,
+            "rxd_docs": [],
+            "ctx": "",
+            "a": "",
+            "confidence": 0.0,
+            "use_fb": False,
+            "sources": []
+        })
+        
+        response_data = {
+            "answer": result["a"],
+            "use_fallback": result["use_fb"]
+        }
+        
+        if CONFIG.get('features', {}).get('show_confidence', True):
+            response_data["confidence"] = result["confidence"]
+        
+        if CONFIG.get('features', {}).get('show_sources', True):
+            response_data["sources"] = result["sources"]
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        print(f"ERROR in /api/query: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================
+# CLI MODE
+# ============================================================
+
+def run_cli():
+    """Interactive CLI mode"""
+    if not initialize_system():
+        print("Failed to initialize!")
+        return
+    
+    print(f"Ask questions (type 'quit' to exit)")
+    print(f"   Commands: /set <discipline>, /seta <area>, /clear")
+    print("-" * 70)
+    
+    active_discipline = None
+    active_area = None
+    
+    while True:
+        q = input("➜ Your question: ").strip()
+        
+        if q.lower() in ['quit', 'exit', 'q']:
+            print("\n👋 Goodbye!")
+            break
+        
+        if q.lower().startswith('/set '):
+            discipline = q[5:].strip()
+            active_discipline = discipline
+            print(f"Discipline set to: {discipline}")
+            continue
+        
+        if q.lower().startswith('/seta '):
+            area = q[6:].strip()
+            active_area = area
+            print(f"Area set to: {area}")
+            continue
+        
+        if q.lower() == '/clear':
+            active_discipline = None
+            active_area = None
+            print("✅ Filters cleared")
+            continue
+        
+        if not q:
+            continue
+        
+        result = app_graph.invoke({
+            "q": q,
+            "discipline": active_discipline,
+            "area": active_area,
+            "rxd_docs": [],
+            "ctx": "",
+            "a": "",
+            "confidence": 0.0,
+            "use_fb": False,
+            "sources": []
+        })
+        
+        print(f"\nAnswer: {result['a']}")
+        print(f"Confidence: {result['confidence']:.1%}")
+        print("-" * 70 + "\n")
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+if __name__ == '__main__':
+    if len(sys.argv) > 1 and sys.argv[1] == 'cli':
+        run_cli()
+    else:
+        if initialize_system():
+            port = int(os.environ.get('PORT', 5000))
+            app.run(host='0.0.0.0', port=port)
+        else:
+            print("Failed to initialize!")
+            sys.exit(1)

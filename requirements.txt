@@ -1,0 +1,9 @@
+flask
+flask-cors
+langchain
+langchain-openai
+langchain-chroma
+langgraph
+chromadb
+openai
+gunicorn
