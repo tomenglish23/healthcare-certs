@@ -287,45 +287,126 @@ class RAGState(TypedDict):
     use_fb: bool
     sources: List[str]
 
-
-def create_rag_graph(vs: VectorStore):  # ? NOT indented under RAGState
+def create_rag_graph(vs: VectorStore):
     """Creates the LangGraph workflow"""
     
     llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, temperature=0)
     
-    # All these functions indented INSIDE create_rag_graph
     def retrieve_docs(state: RAGState) -> RAGState:
         """Retrieve relevant docs"""
-        # ... your code ...
+        print("DEBUG: retrieve_docs STARTED")
+        
+        discipline = state.get("discipline")
+        area = state.get("area")
+        
+        if CONFIG.get('features', {}).get('debug_mode'):
+            print(f"\nFILTER DEBUG:")
+            print(f"   Looking for discipline: '{discipline}'")
+            print(f"   Looking for area: '{area}'")
+        
+        filter_dict = None
+        
+        try:
+            if CONFIG.get('features', {}).get('debug_mode'):
+                print(f"   Filter dict: {filter_dict} (filtering disabled)")
+            
+            docs = vs.search(state["q"], k=4, filter_dict=None)
+            
+            if CONFIG.get('features', {}).get('debug_mode'):
+                print(f"   Retrieved: {len(docs)} docs")
+                if docs:
+                    print(f"   First doc meta: {docs[0].metadata}")
+            
+        except Exception as e:
+            print(f"   ERROR in retrieve_docs: {e}")
+            import traceback
+            traceback.print_exc()
+            docs = []
+        
+        state["rxd_docs"] = docs
+        state["ctx"] = "\n\n".join([doc.page_content for doc in docs])
+        state["sources"] = [doc.metadata.get("source", "unknown") for doc in docs]
+        
+        print(f"DEBUG: retrieve_docs found {len(docs)} documents")
+        print(f"DEBUG: Context length: {len(state['ctx'])} chars")
+        
         return state
     
     def grade_relevance(state: RAGState) -> RAGState:
         """Determine if retrieved docs are relevant"""
-        # ... your code ...
+        print("DEBUG: grade_relevance STARTED")
+        print(f"DEBUG: rxd_docs count: {len(state.get('rxd_docs', []))}")
+        print(f"DEBUG: ctx length: {len(state.get('ctx', ''))}")
+        
+        if not state["rxd_docs"] or not state.get("ctx"):
+            state["use_fb"] = True
+            state["confidence"] = 0.0
+            print("DEBUG: No docs found, using fallback")
+            return state
+        
+        q_words = set(state["q"].lower().split())
+        ctx_words = set(state["ctx"].lower().split())
+        
+        if not q_words:
+            state["confidence"] = 0.0
+            state["use_fb"] = True
+            return state
+        
+        overlap = len(q_words & ctx_words)
+        confidence = min(overlap / len(q_words), 1.0) if len(q_words) > 0 else 0.0
+        
+        state["confidence"] = round(confidence, 2)
+        state["use_fb"] = False
+        
+        print(f"DEBUG: Confidence calculated = {confidence}")
+        
         return state
     
     def gen_a(state: RAGState) -> RAGState:
         """Generate answer from context"""
-        # ... your code ...
+        print("DEBUG: gen_a STARTED")
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are an expert assistant. "
+                      "Answer based ONLY on the provided context. Be concise and accurate."),
+            ("user", "Context:\n{ctx}\n\nQuestion: {q}\n\nAnswer:")
+        ])
+        
+        chain = prompt | llm
+        response = chain.invoke({"ctx": state["ctx"], "q": state["q"]})
+        state["a"] = response.content
         return state
     
     def fallback_a(state: RAGState) -> RAGState:
         """Use OpenAI when docs don't have answer"""
-        # ... your code ...
+        print("DEBUG: fallback_a STARTED")
+        
+        if not CONFIG.get('features', {}).get('enable_fallback', True):
+            state["a"] = "No relevant information found in knowledge base."
+            return state
+            
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are an expert assistant. Answer this question accurately."),
+            ("user", "{q}")
+        ])
+        
+        chain = prompt | llm
+        response = chain.invoke({"q": state["q"]})
+        state["a"] = f"[Using general knowledge] {response.content}"
         return state
     
     def should_use_fb(state: RAGState) -> str:
         return "fallback" if state["use_fb"] else "generate"
     
-    # Build graph - NO analyze node
+    # Build graph
     workflow = StateGraph(RAGState)
     workflow.add_node("retrieve", retrieve_docs)
     workflow.add_node("grade", grade_relevance)
     workflow.add_node("generate", gen_a)
     workflow.add_node("fallback", fallback_a)
     
-    workflow.set_entry_point("retrieve")  # ? Start at retrieve, NOT analyze
-    workflow.add_edge("retrieve", "grade")  # ? No analyze edge
+    workflow.set_entry_point("retrieve")
+    workflow.add_edge("retrieve", "grade")
     workflow.add_conditional_edges("grade", should_use_fb, {"generate": "generate", "fallback": "fallback"})
     workflow.add_edge("generate", END)
     workflow.add_edge("fallback", END)
@@ -432,7 +513,7 @@ def get_config():
     # with open('build/taxonomies.json') as f:
         # return jsonify(json.load(f))
 
-@app.route('/api/taxonomies', methods=['GET', 'POST'])
+@app.route('/api/taxonomies')
 def get_taxonomies():
     """Return available taxonomies for filters"""
     taxonomies = {
@@ -491,8 +572,6 @@ def query():
             "sources": []
         })
         
-        print(f"DEBUG: Result confidence = {result.get('confidence')} (type: {type(result.get('confidence'))})")
-
         response_data = {
             "answer": result["a"],
             "use_fallback": result["use_fb"]
