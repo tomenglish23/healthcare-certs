@@ -582,6 +582,8 @@ def query():
             "sources": []
         })
         
+        print(f"DEBUG: Result confidence = {result.get('confidence')} (type: {type(result.get('confidence'))})")
+
         response_data = {
             "answer": result["a"],
             "use_fallback": result["use_fb"]
