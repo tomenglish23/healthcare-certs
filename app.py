@@ -354,25 +354,25 @@ def create_rag_graph(vs: VectorStore):
     
     def grade_relevance(state: RAGState) -> RAGState:
         """Determine if retrieved docs are relevant"""
-        if not state["rxd_docs"]:
+        if not state["rxd_docs"] or not state.get("ctx"):
             state["use_fb"] = True
             state["confidence"] = 0.0
-            print("DEBUG: No docs found, using fallback")
             return state
     
         q_words = set(state["q"].lower().split())
         ctx_words = set(state["ctx"].lower().split())
+    
+        if not q_words:  # Safety check
+            state["confidence"] = 0.0
+            state["use_fb"] = True
+            return state
+    
         overlap = len(q_words & ctx_words)
-        confidence = min(overlap / max(len(q_words), 1), 1.0)
+        confidence = min(overlap / len(q_words), 1.0) if len(q_words) > 0 else 0.0
     
-        print(f"DEBUG: Confidence = {confidence}, Overlap = {overlap}")
-        print(f"DEBUG: Question words: {q_words}")
-        print(f"DEBUG: Context preview: {state['ctx'][:200]}...")
-    
-        state["confidence"] = confidence
-        state["use_fb"] = False  # ? FORCE this to False
-        print(f"DEBUG: use_fb set to {state['use_fb']}")
-        return state    
+        state["confidence"] = round(confidence, 2)  # Round to avoid float precision issues
+        state["use_fb"] = False  # Always use retrieved docs
+        return state
 
     def gen_a(state: RAGState) -> RAGState:
         """Generate answer from context"""
