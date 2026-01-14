@@ -1,0 +1,66 @@
+product:
+  name: "healthcare-certs"
+  version: "1.0.0"
+
+branding:
+  title: "Healthcare Certifications"
+  subtitle: "Tennessee & West Virginia"
+
+data:
+  source_file: "healthcare-certs-all.md"
+
+features:
+  show_confidence: true
+  show_sources: true
+
+taxonomies:
+  states:
+    - value: "TN"
+      label: "Tennessee"
+    - value: "WV"
+      label: "West Virginia"
+  
+  certifications:
+    - value: "CNA"
+      label: "CNA"
+    - value: "Phlebotomy"
+      label: "Phlebotomy"
+    - value: "Medical Assistant"
+      label: "Medical Assistant"
+    - value: "EMT"
+      label: "EMT"
+    - value: "Dental Assistant"
+      label: "Dental Assistant"
+    - value: "Pharmacy Tech"
+      label: "Pharmacy Tech"
+  
+  cost_ranges:
+    - value: "under500"
+      label: "Under $500"
+    - value: "500to1000"
+      label: "$500-$1,000"
+    - value: "1000to2000"
+      label: "$1,000-$2,000"
+    - value: "2000to5000"
+      label: "$2,000-$5,000"
+    - value: "over5000"
+      label: "Over $5,000"
+  
+  durations:
+    - value: "under4weeks"
+      label: "Under 4 weeks"
+    - value: "4to8weeks"
+      label: "4-8 weeks"
+    - value: "8to12weeks"
+      label: "8-12 weeks"
+    - value: "3to6months"
+      label: "3-6 months"
+    - value: "6to12months"
+      label: "6-12 months"
+
+sample_questions:
+  - "What are the requirements for CNA certification in Tennessee?"
+  - "How long does phlebotomy training take?"
+  - "What certifications cost under $1000?"
+  - "Tell me about EMT training in Tennessee"
+  - "What financial aid is available?"
