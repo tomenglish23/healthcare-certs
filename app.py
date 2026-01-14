@@ -1,13 +1,13 @@
 """
-Modern RAG System - Clean Architecture
-- MarkdownHeaderTextSplitter for intelligent chunking
-- Pure vector search (no complex filtering)
-- Simple 3-node graph
-- Config-driven, works with any markdown dataset
+TEAI RAG System - Final Clean Version
+- Zero hardcoding
+- Config-driven taxonomies
+- Simple Q&A architecture
 """
 from __future__ import annotations
 
 import os
+import sys
 from typing import TypedDict, List, Dict, Any
 
 from flask import Flask, request, jsonify
@@ -27,11 +27,12 @@ from langgraph.graph import StateGraph, END
 # ============================================================
 
 def load_config() -> Dict[str, Any]:
-    """Load config from YAML or use defaults"""
+    """Load config from YAML"""
     try:
         with open('config.yaml', 'r') as f:
             return yaml.safe_load(f)
     except:
+        print("[!] config.yaml not found, using defaults")
         return {
             'product': {'name': 'healthcare-certs', 'version': '1.0.0'},
             'branding': {'title': 'Healthcare Certifications'},
@@ -41,7 +42,6 @@ def load_config() -> Dict[str, Any]:
 
 CONFIG = load_config()
 
-# Shortcuts
 PRODUCT_NAME = CONFIG['product']['name']
 PRODUCT_VERSION = CONFIG['product']['version']
 DATA_FILE = CONFIG['data']['source_file']
@@ -60,7 +60,6 @@ print(f"[*] Data: {DATA_FILE}")
 app = Flask(__name__)
 CORS(app)
 
-# Globals
 vector_store = None
 app_graph = None
 
@@ -70,9 +69,8 @@ app_graph = None
 # ============================================================
 
 def load_documents() -> List[Document]:
-    """Load and chunk markdown files using MarkdownHeaderTextSplitter"""
+    """Load and chunk markdown files"""
     
-    # Define headers to split on
     headers_to_split_on = [
         ("#", "h1"),
         ("##", "h2"),
@@ -84,19 +82,16 @@ def load_documents() -> List[Document]:
         strip_headers=False
     )
     
-    # Read markdown file
     filepath = os.path.join("./data", DATA_FILE)
     with open(filepath, 'r', encoding='utf-8') as f:
         content = f.read()
     
-    # Split into chunks
     docs = splitter.split_text(content)
     
-    # Add source to metadata
     for doc in docs:
         doc.metadata['source'] = DATA_FILE
     
-    print(f"[*] Loaded {len(docs)} chunks from {DATA_FILE}")
+    print(f"[*] Loaded {len(docs)} chunks")
     return docs
 
 
@@ -105,7 +100,7 @@ def load_documents() -> List[Document]:
 # ============================================================
 
 def create_vectorstore(docs: List[Document]) -> Chroma:
-    """Create or load ChromaDB vectorstore"""
+    """Create or load vectorstore"""
     
     embeddings = OpenAIEmbeddings(model=OPENAI_EMBED_MODEL)
     persist_dir = "./chroma_db"
@@ -117,7 +112,7 @@ def create_vectorstore(docs: List[Document]) -> Chroma:
             embedding_function=embeddings
         )
     else:
-        print(f"[*] Creating vectorstore with {len(docs)} documents")
+        print(f"[*] Creating vectorstore")
         vs = Chroma.from_documents(
             documents=docs,
             embedding=embeddings,
@@ -132,7 +127,7 @@ def create_vectorstore(docs: List[Document]) -> Chroma:
 # ============================================================
 
 class RAGState(TypedDict):
-    """Clean state - just what we need"""
+    """Clean state"""
     question: str
     docs: List[Document]
     context: str
@@ -142,29 +137,27 @@ class RAGState(TypedDict):
 
 
 def create_rag_graph(vs: Chroma):
-    """Build simple 3-node RAG graph"""
+    """Build RAG graph"""
     
     llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, temperature=0)
     
     def retrieve(state: RAGState) -> RAGState:
-        """Retrieve relevant documents via vector search"""
+        """Retrieve documents"""
         docs = vs.similarity_search(state["question"], k=4)
         
         state["docs"] = docs
         state["context"] = "\n\n".join([doc.page_content for doc in docs])
         state["sources"] = [doc.metadata.get("source", "unknown") for doc in docs]
         
-        print(f"[*] Retrieved {len(docs)} documents")
         return state
     
     def grade(state: RAGState) -> RAGState:
-        """Calculate confidence based on context relevance"""
+        """Calculate confidence"""
         
         if not state["docs"] or not state["context"]:
             state["confidence"] = 0.0
             return state
         
-        # Simple word overlap confidence
         q_words = set(state["question"].lower().split())
         ctx_words = set(state["context"].lower().split())
         
@@ -176,11 +169,10 @@ def create_rag_graph(vs: Chroma):
         confidence = min(overlap / len(q_words), 1.0)
         state["confidence"] = round(confidence, 2)
         
-        print(f"[*] Confidence: {state['confidence']}")
         return state
     
     def generate(state: RAGState) -> RAGState:
-        """Generate answer from context"""
+        """Generate answer"""
         
         if state["confidence"] < 0.1:
             state["answer"] = "I don't have enough relevant information to answer that question."
@@ -201,7 +193,6 @@ def create_rag_graph(vs: Chroma):
         state["answer"] = response.content
         return state
     
-    # Build graph
     workflow = StateGraph(RAGState)
     workflow.add_node("retrieve", retrieve)
     workflow.add_node("grade", grade)
@@ -213,31 +204,6 @@ def create_rag_graph(vs: Chroma):
     workflow.add_edge("generate", END)
     
     return workflow.compile()
-
-
-# ============================================================
-# INITIALIZATION
-# ============================================================
-
-def initialize():
-    """Initialize system on startup"""
-    global vector_store, app_graph
-    
-    print("=" * 50)
-    print("Initializing...")
-    print("=" * 50)
-    
-    # Load documents
-    docs = load_documents()
-    
-    # Create vectorstore
-    vector_store = create_vectorstore(docs)
-    
-    # Build RAG graph
-    app_graph = create_rag_graph(vector_store)
-    
-    print("[*] System ready!")
-    return True
 
 
 # ============================================================
@@ -254,16 +220,20 @@ def index():
     })
 
 
+@app.route('/api/config', methods=['GET'])
+def get_config():
+    """Return public config for frontend"""
+    return jsonify({
+        'product': CONFIG.get('product', {}),
+        'branding': CONFIG.get('branding', {}),
+        'features': CONFIG.get('features', {})
+    })
+
+
 @app.route('/api/taxonomies', methods=['GET', 'POST'])
 def get_taxonomies():
-    """Return taxonomies for frontend filters"""
-    taxonomies = {
-        'states': ['Tennessee', 'West Virginia'],
-        'certifications': ['CNA', 'Phlebotomy', 'Medical Assistant', 'EMT', 'Dental Assistant', 'Pharmacy Tech'],
-        'cost_ranges': ['under500', '500to1000', '1000to2000', '2000to5000', 'over5000'],
-        'durations': ['under4weeks', '4to8weeks', '8to12weeks', '3to6months', '6to12months']
-    }
-    return jsonify(taxonomies)
+    """Return taxonomies from config"""
+    return jsonify(CONFIG.get('taxonomies', {}))
 
 
 @app.route('/api/query', methods=['POST'])
@@ -279,9 +249,6 @@ def query():
         if not app_graph:
             return jsonify({"error": "System not initialized"}), 503
         
-        print(f"\n[*] Query: {question}")
-        
-        # Run RAG pipeline
         result = app_graph.invoke({
             "question": question,
             "docs": [],
@@ -304,6 +271,26 @@ def query():
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+
+# ============================================================
+# INITIALIZATION
+# ============================================================
+
+def initialize():
+    """Initialize system"""
+    global vector_store, app_graph
+    
+    print("=" * 50)
+    print("Initializing...")
+    print("=" * 50)
+    
+    docs = load_documents()
+    vector_store = create_vectorstore(docs)
+    app_graph = create_rag_graph(vector_store)
+    
+    print("[*] System ready!")
+    return True
 
 
 # ============================================================
