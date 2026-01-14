@@ -226,9 +226,9 @@ def get_config():
     return jsonify({
         'product': CONFIG.get('product', {}),
         'branding': CONFIG.get('branding', {}),
-        'features': CONFIG.get('features', {})
+        'features': CONFIG.get('features', {}),
+        'sample_questions': CONFIG.get('sample_questions', [])  # ADD THIS LINE
     })
-
 
 @app.route('/api/taxonomies', methods=['GET', 'POST'])
 def get_taxonomies():
