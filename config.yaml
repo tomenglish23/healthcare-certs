@@ -59,8 +59,82 @@ taxonomies:
       label: "6-12 months"
 
 sample_questions:
-  - "What are the requirements for CNA certification in Tennessee?"
-  - "How long does phlebotomy training take?"
-  - "What certifications cost under $1000?"
-  - "Tell me about EMT training in Tennessee"
-  - "What financial aid is available?"
+  default:
+    - "What healthcare certifications are available?"
+    - "What programs cost under $1000?"
+    - "What's the fastest certification I can get?"
+    - "Tell me about financial aid options"
+  
+  TN:
+    CNA:
+      - "What are CNA requirements in Tennessee?"
+      - "Does TN Promise cover CNA training?"
+      - "How much does CNA certification cost in Tennessee?"
+      - "How long does CNA training take in TN?"
+    
+    Phlebotomy:
+      - "How do I become a phlebotomist in Tennessee?"
+      - "What's the cost of phlebotomy training in TN?"
+      - "How long is phlebotomy certification in Tennessee?"
+      - "Is TN Promise available for phlebotomy?"
+    
+    "Medical Assistant":
+      - "What are Medical Assistant requirements in Tennessee?"
+      - "How long does MA training take in TN?"
+      - "What does Medical Assistant certification cost in Tennessee?"
+      - "Can TN Promise cover Medical Assistant training?"
+    
+    EMT:
+      - "What are EMT requirements in Tennessee?"
+      - "How long is EMT training in TN?"
+      - "What does EMT certification cost in Tennessee?"
+      - "Where can I get EMT training in Tennessee?"
+    
+    "Dental Assistant":
+      - "How do I become a Dental Assistant in Tennessee?"
+      - "What's the cost of Dental Assistant training in TN?"
+      - "Does TN Promise cover Dental Assistant programs?"
+      - "How long is Dental Assistant training in Tennessee?"
+    
+    "Pharmacy Tech":
+      - "What are Pharmacy Tech requirements in Tennessee?"
+      - "How much does Pharmacy Tech training cost in TN?"
+      - "How long does it take to become a Pharmacy Tech in Tennessee?"
+      - "Is TN Promise available for Pharmacy Tech?"
+  
+  WV:
+    CNA:
+      - "What are CNA requirements in West Virginia?"
+      - "Does WV Invests cover CNA training?"
+      - "How much does CNA certification cost in WV?"
+      - "How long does CNA training take in West Virginia?"
+    
+    Phlebotomy:
+      - "How do I become a phlebotomist in West Virginia?"
+      - "What's the cost of phlebotomy training in WV?"
+      - "How long is phlebotomy certification in West Virginia?"
+      - "Is WV Invests available for phlebotomy?"
+    
+    "Medical Assistant":
+      - "What are Medical Assistant requirements in West Virginia?"
+      - "How long does MA training take in WV?"
+      - "What does Medical Assistant certification cost in West Virginia?"
+      - "Can WV Invests cover Medical Assistant training?"
+    
+    EMT:
+      - "What are EMT requirements in West Virginia?"
+      - "How long is EMT training in WV?"
+      - "What does EMT certification cost in West Virginia?"
+      - "Where can I get EMT training in West Virginia?"
+    
+    "Dental Assistant":
+      - "How do I become a Dental Assistant in West Virginia?"
+      - "What's the cost of Dental Assistant training in WV?"
+      - "Does WV Invests cover Dental Assistant programs?"
+      - "How long is Dental Assistant training in West Virginia?"
+    
+    "Pharmacy Tech":
+      - "What are Pharmacy Tech requirements in West Virginia?"
+      - "How much does Pharmacy Tech training cost in WV?"
+      - "How long does it take to become a Pharmacy Tech in West Virginia?"
+      - "Is WV Invests available for Pharmacy Tech?"
