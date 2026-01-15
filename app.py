@@ -147,7 +147,8 @@ def create_rag_graph(vs: Chroma):
         
         state["docs"] = docs
         state["context"] = "\n\n".join([doc.page_content for doc in docs])
-        state["sources"] = [doc.metadata.get("source", "unknown") for doc in docs]
+        # Deduplicate sources while preserving order
+        state["sources"] = list(dict.fromkeys([doc.metadata.get("source", "unknown") for doc in docs]))
         
         return state
     
@@ -226,9 +227,9 @@ def get_config():
     return jsonify({
         'product': CONFIG.get('product', {}),
         'branding': CONFIG.get('branding', {}),
-        'features': CONFIG.get('features', {}),
-        'sample_questions': CONFIG.get('sample_questions', [])  # ADD THIS LINE
+        'features': CONFIG.get('features', {})
     })
+
 
 @app.route('/api/taxonomies', methods=['GET', 'POST'])
 def get_taxonomies():
@@ -304,3 +305,4 @@ if __name__ == '__main__':
     else:
         print("[!] Initialization failed")
         sys.exit(1)
+
