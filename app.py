@@ -227,7 +227,8 @@ def get_config():
     return jsonify({
         'product': CONFIG.get('product', {}),
         'branding': CONFIG.get('branding', {}),
-        'features': CONFIG.get('features', {})
+        'features': CONFIG.get('features', {}),
+        'sample_questions': CONFIG.get('sample_questions', {})
     })
 
 
